@@ -11,7 +11,7 @@ app.use(express.static("public"));
 
 // Endpoint to serve index.html
 app.get("/:room/connect", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+  res.sendFile(path.join(__dirname, "index.html"));
 });
 
 io.on("connection", (socket) => {
