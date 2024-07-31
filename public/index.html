@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Group Audio Call</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        text-align: center;
+        padding: 20px;
+      }
+      #users {
+        display: flex;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 20px;
+      }
+      .user {
+        width: 150px;
+        height: 150px;
+        background-color: lightgray;
+        border: 2px solid gray;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Group Audio Call</h1>
+    <div id="users"></div>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+      const socket = io("/");
+      const usersContainer = document.getElementById("users");
+      const peers = {};
+      let localStream;
+
+      // Get local audio stream
+      navigator.mediaDevices
+        .getUserMedia({ audio: true })
+        .then((stream) => {
+          localStream = stream;
+          const roomName = window.location.pathname.substring(1);
+
+          socket.emit("join", roomName);
+        })
+        .catch((error) => {
+          console.error("Error accessing audio stream:", error);
+        });
+
+      socket.on("user-connected", async (userId) => {
+        const peerConnection = createPeerConnection(userId);
+        peers[userId] = peerConnection;
+
+        // Create and send offer
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        socket.emit("send-signal", { signal: offer, userId });
+      });
+
+      socket.on("receive-signal", async ({ signal, userId }) => {
+        let peerConnection = peers[userId];
+        if (!peerConnection) {
+          peerConnection = createPeerConnection(userId);
+          peers[userId] = peerConnection;
+        }
+
+        // Handle incoming ICE candidates
+        if (signal.candidate) {
+          await peerConnection.addIceCandidate(new RTCIceCandidate(signal));
+        }
+
+        // Handle incoming offers/answers
+        if (signal.sdp) {
+          await peerConnection.setRemoteDescription(
+            new RTCSessionDescription(signal)
+          );
+          if (signal.type === "offer") {
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            socket.emit("send-signal", { signal: answer, userId });
+          }
+        }
+      });
+
+      socket.on("user-disconnected", (userId) => {
+        const userDiv = document.getElementById(userId);
+        if (userDiv) userDiv.remove();
+
+        const peerConnection = peers[userId];
+        if (peerConnection) peerConnection.close();
+
+        delete peers[userId];
+      });
+
+      function createPeerConnection(userId) {
+        const peerConnection = new RTCPeerConnection({
+          iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+        });
+
+        // Add local stream to the peer connection
+        localStream.getTracks().forEach((track) => {
+          peerConnection.addTrack(track, localStream);
+        });
+
+        // Handle ICE candidates
+        peerConnection.onicecandidate = (event) => {
+          if (event.candidate) {
+            socket.emit("send-signal", { signal: event.candidate, userId });
+          }
+        };
+
+        // Handle incoming tracks
+        peerConnection.ontrack = (event) => {
+          const newAudio = document.createElement("audio");
+          newAudio.srcObject = event.streams[0];
+          newAudio.autoplay = true;
+
+          const userDiv = document.createElement("div");
+          userDiv.classList.add("user");
+          userDiv.id = userId;
+          userDiv.appendChild(newAudio);
+          usersContainer.appendChild(userDiv);
+        };
+
+        return peerConnection;
+      }
+    </script>
+  </body>
+</html>
